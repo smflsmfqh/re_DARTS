@@ -37,6 +37,17 @@ fh = logging.FileHandler(os.path.join(args.save,
 fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
 
+# 파라미터 크기 측정
+def count_parameters(model):
+    pytorch_total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    non_trainable_params = pytorch_total_params - trainable_params
+    return {
+        "Total Parameters": pytorch_total_params,
+        "Trainable Parameters": trainable_params,
+        "Non-trainable Parameters": non_trainable_params
+    }
+
 def main():
   if not torch.cuda.is_available():
     logging.info('no gpu device available')
@@ -66,6 +77,13 @@ def main():
     utils.load(model, args.model_path, genotype)
 
   logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
+
+  # 파라미터 상세 정보 출력
+  param_info = count_parameters(model)
+  logging.info(f"Total Parameters: {param_info['Total Parameters']}")
+  logging.info(f"Trainable Parameters: {param_info['Trainable Parameters']}")
+  logging.info(f"Non-trainable Parameters: {param_info['Non-trainable Parameters']}")
+
 
   criterion = nn.CrossEntropyLoss()
   criterion = criterion.cuda()
@@ -153,12 +171,20 @@ def infer(valid_queue, model, criterion):
   top5 = utils.AvgrageMeter()
   model.eval()
 
+  batch_times = []  # 각 배치 시간을 저장할 리스트
+
   with torch.no_grad():
     for step, (input, target) in enumerate(valid_queue):
       input = Variable(input).cuda()
       target = Variable(target).cuda(non_blocking=True)
 
+      step_start_time = time.time()
       logits, _ = model(input)
+      step_end_time = time.time()
+
+      step_time = step_end_time - step_start_time
+      batch_times.append(step_time)  # 배치 시간 기록
+
       loss = criterion(logits, target)
 
       prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
@@ -172,6 +198,12 @@ def infer(valid_queue, model, criterion):
         if args.debug:
           break
   
+  avg_batch_time = sum(batch_times) / len(batch_times) if batch_times else 0.0  # 평균 배치 시간 계산
+  total_time = sum(batch_times)
+
+  logging.info(f"Total time: {total_time:.2f} seconds")
+  logging.info(f"Average batch time: {avg_batch_time:.4f} seconds")
+
   return top1.avg, objs.avg
 
 
